@@ -6,7 +6,7 @@
 
 // Configuration
 #define AP_SSID "FocusKnob-Setup"
-#define AP_PASSWORD "pomodoro123"
+#define AP_PASSWORD "Focus"
 #define CONFIG_FILE "/wifi_config.json"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 
