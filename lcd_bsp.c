@@ -11,6 +11,7 @@
 #include "jira_hours_data.h"
 #include "usb_sync.h"
 #include "home_bg.h"
+#include "focusknob_icons.h"
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
@@ -857,19 +858,20 @@ static void create_timer_ui(void)
 // App definitions for menu
 typedef struct {
     const char* icon;
+    const lv_font_t* font;  // NULL = use default (montserrat_18)
     bool active;  // true = implemented, false = placeholder
 } app_def_t;
 
 // 8 outer ring apps (arranged in circle at 45° intervals)
 static const app_def_t apps[] = {
-    {LV_SYMBOL_BELL, true},       // 0: Pomodoro Timer (top)
-    {LV_SYMBOL_LIST, true},       // 1: Time Log
-    {LV_SYMBOL_WIFI, true},       // 2: WiFi
-    {LV_SYMBOL_EDIT, true},       // 3: Jira TimeLog
-    {LV_SYMBOL_EYE_OPEN, true},   // 4: Weather
-    {LV_SYMBOL_ENVELOPE, true},    // 5: Calendar
-    {LV_SYMBOL_CHARGE, false},    // 6: Battery
-    {LV_SYMBOL_HOME, false},      // 7: Home
+    {FK_ICON_CLOCK,     &focusknob_icons_18, true},   // 0: Pomodoro Timer (top)
+    {LV_SYMBOL_LIST,    NULL, true},                   // 1: Time Log
+    {LV_SYMBOL_WIFI,    NULL, true},                   // 2: WiFi
+    {FK_ICON_CLIPBOARD, &focusknob_icons_18, true},   // 3: Jira TimeLog
+    {FK_ICON_CLOUD_SUN, &focusknob_icons_18, true},   // 4: Weather
+    {FK_ICON_CALENDAR,  &focusknob_icons_18, true},   // 5: Calendar
+    {LV_SYMBOL_CHARGE,  NULL, false},                  // 6: Battery
+    {LV_SYMBOL_HOME,    NULL, false},                  // 7: Home
 };
 #define NUM_APPS 8
 
@@ -937,7 +939,7 @@ static void create_menu_ui(void)
 
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, apps[i].icon);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(lbl, apps[i].font ? apps[i].font : &lv_font_montserrat_18, 0);
         lv_obj_set_style_text_color(lbl, apps[i].active ? COLOR_TEXT : COLOR_TEXT_DIM, 0);
         lv_obj_center(lbl);
     }
@@ -1160,20 +1162,18 @@ static void create_home_ui(void)
     lv_obj_align(home_date_label, LV_ALIGN_CENTER, 0, 35);
     lv_label_set_text(home_date_label, "Jan 1, 2025");
 
-    // ── Weather temp + condition (below date) ──
+    // ── Weather icon (Font Awesome custom font) ──
     home_weather_icon = lv_label_create(home_screen);
-    lv_obj_set_style_text_font(home_weather_icon, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(home_weather_icon, COLOR_TEXT_DIM, 0);
-    lv_obj_align(home_weather_icon, LV_ALIGN_CENTER, 0, 65);
-    lv_obj_set_style_text_align(home_weather_icon, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(home_weather_icon, &focusknob_icons_18, 0);
+    lv_obj_set_style_text_color(home_weather_icon, lv_color_hex(0xf1c40f), 0);
+    lv_obj_align(home_weather_icon, LV_ALIGN_CENTER, -60, 65);
     lv_label_set_text(home_weather_icon, "");
 
-    // (hidden — combined into icon label above)
+    // ── Weather temp + condition text ──
     home_weather_temp = lv_label_create(home_screen);
     lv_obj_set_style_text_font(home_weather_temp, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(home_weather_temp, COLOR_TEXT, 0);
-    lv_obj_align(home_weather_temp, LV_ALIGN_CENTER, 15, 65);
-    lv_obj_add_flag(home_weather_temp, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_color(home_weather_temp, COLOR_TEXT_DIM, 0);
+    lv_obj_align(home_weather_temp, LV_ALIGN_CENTER, 10, 65);
     lv_label_set_text(home_weather_temp, "");
 
     // ── Next meeting (below weather) ──
@@ -1228,13 +1228,14 @@ static void update_clock(lv_timer_t *timer)
     }
     if (home_day_label) lv_label_set_text(home_day_label, day_buf);
 
-    // Update home screen weather display (combined temp + condition)
-    if (weather_data_is_synced() && home_weather_icon) {
+    // Update home screen weather display (icon + temp + condition)
+    if (weather_data_is_synced() && home_weather_icon && home_weather_temp) {
         const weather_current_t* w = weather_data_get_current();
         if (w) {
+            lv_label_set_text(home_weather_icon, weather_icon_for_condition(w->condition_id));
             static char wbuf[32];
             snprintf(wbuf, sizeof(wbuf), "%d\xC2\xB0  %s", w->temp, w->condition);
-            lv_label_set_text(home_weather_icon, wbuf);
+            lv_label_set_text(home_weather_temp, wbuf);
         }
     }
 
@@ -2809,16 +2810,16 @@ void jira_update_log_status(bool success, const char* message)
 // ═══════════════════════════════════════════════════════════════════
 
 static const char* weather_icon_for_condition(uint16_t condition_id) {
-    // LVGL built-in FontAwesome symbols + clear text labels
-    if (condition_id == 800)                          return LV_SYMBOL_CHARGE " ";  // clear sky (bolt = bright)
-    if (condition_id == 801)                          return LV_SYMBOL_IMAGE " ";   // few clouds
-    if (condition_id >= 802 && condition_id <= 804)   return LV_SYMBOL_IMAGE " ";   // cloudy
-    if (condition_id >= 500 && condition_id < 600)    return LV_SYMBOL_TINT " ";    // rain (droplet)
-    if (condition_id >= 300 && condition_id < 400)    return LV_SYMBOL_TINT " ";    // drizzle
-    if (condition_id >= 600 && condition_id < 700)    return "* ";                  // snow
-    if (condition_id >= 200 && condition_id < 300)    return LV_SYMBOL_WARNING " "; // thunderstorm
-    if (condition_id >= 700 && condition_id < 800)    return "~ ";                  // fog/haze
-    return "";
+    // Font Awesome 6 weather icons (rendered with focusknob_icons font)
+    if (condition_id == 800)                          return FK_ICON_SUN;         // clear sky
+    if (condition_id == 801)                          return FK_ICON_CLOUD_SUN;   // few clouds
+    if (condition_id >= 802 && condition_id <= 804)   return FK_ICON_CLOUD;       // cloudy
+    if (condition_id >= 500 && condition_id < 600)    return FK_ICON_CLOUD_RAIN;  // rain
+    if (condition_id >= 300 && condition_id < 400)    return FK_ICON_CLOUD_RAIN;  // drizzle
+    if (condition_id >= 600 && condition_id < 700)    return FK_ICON_SNOWFLAKE;   // snow
+    if (condition_id >= 200 && condition_id < 300)    return FK_ICON_BOLT;        // thunderstorm
+    if (condition_id >= 700 && condition_id < 800)    return FK_ICON_SMOG;        // fog/haze
+    return FK_ICON_CLOUD;
 }
 
 static void create_weather_ui(void) {
@@ -2843,9 +2844,9 @@ static void create_weather_ui(void) {
     lv_obj_align(weather_title_label, LV_ALIGN_TOP_MID, 0, 45);
     lv_label_set_text(weather_title_label, "WEATHER");
 
-    // Weather icon (large text)
+    // Weather icon (Font Awesome custom font)
     weather_icon_label = lv_label_create(weather_screen);
-    lv_obj_set_style_text_font(weather_icon_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(weather_icon_label, &focusknob_icons_24, 0);
     lv_obj_set_style_text_color(weather_icon_label, lv_color_hex(0xf1c40f), 0);
     lv_obj_align(weather_icon_label, LV_ALIGN_CENTER, -75, -40);
     lv_label_set_text(weather_icon_label, "");
@@ -3015,13 +3016,14 @@ void weather_update_ui(void) {
         if (current_screen == SCREEN_WEATHER) {
             update_weather_display();
         }
-        // Update home screen weather (combined temp + condition)
-        if (weather_data_is_synced() && home_weather_icon) {
+        // Update home screen weather (icon + temp + condition)
+        if (weather_data_is_synced() && home_weather_icon && home_weather_temp) {
             const weather_current_t* w = weather_data_get_current();
             if (w) {
+                lv_label_set_text(home_weather_icon, weather_icon_for_condition(w->condition_id));
                 static char wt_buf2[32];
                 snprintf(wt_buf2, sizeof(wt_buf2), "%d\xC2\xB0  %s", w->temp, w->condition);
-                lv_label_set_text(home_weather_icon, wt_buf2);
+                lv_label_set_text(home_weather_temp, wt_buf2);
             }
         }
         xSemaphoreGive(lvgl_mux);
