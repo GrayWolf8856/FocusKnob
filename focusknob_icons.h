@@ -22,6 +22,7 @@ extern const lv_font_t focusknob_icons_24;
 #define FK_ICON_CLOUD_MOON  "\xEF\x9B\x83"   // U+F6C3 fa-cloud-moon
 
 // ── App Icons (from fa-solid-900) ──
+#define FK_ICON_MUSIC       "\xEF\x80\x81"   // U+F001 fa-music
 #define FK_ICON_CALENDAR    "\xEF\x84\xB3"   // U+F133 fa-calendar
 #define FK_ICON_CLOCK       "\xEF\x80\x97"   // U+F017 fa-clock
 #define FK_ICON_BELL        "\xEF\x83\xB3"   // U+F0F3 fa-bell

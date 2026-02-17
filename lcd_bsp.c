@@ -12,6 +12,8 @@
 #include "usb_sync.h"
 #include "home_bg.h"
 #include "focusknob_icons.h"
+#include "bts_quiz_data.h"
+#include "esp_random.h"
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
@@ -420,6 +422,41 @@ static lv_obj_t *home_jira_hours_label = NULL;
 // Calendar screen LOG button
 static lv_obj_t *calendar_log_btn = NULL;
 
+// BTS Quiz screen elements
+static lv_obj_t *bts_quiz_screen = NULL;
+// Start sub-screen
+static lv_obj_t *bts_start_title = NULL;
+static lv_obj_t *bts_start_subtitle = NULL;
+static lv_obj_t *bts_start_btn = NULL;
+static lv_obj_t *bts_back_btn = NULL;
+// Question sub-screen
+static lv_obj_t *bts_q_progress = NULL;
+static lv_obj_t *bts_q_difficulty = NULL;
+static lv_obj_t *bts_q_text = NULL;
+static lv_obj_t *bts_q_btns[4] = {NULL};
+static lv_obj_t *bts_q_btn_labels[4] = {NULL};
+// Result sub-screen
+static lv_obj_t *bts_r_title = NULL;
+static lv_obj_t *bts_r_score = NULL;
+static lv_obj_t *bts_r_pct = NULL;
+static lv_obj_t *bts_r_retry_btn = NULL;
+static lv_obj_t *bts_r_back_btn = NULL;
+
+// Quiz session state
+typedef enum {
+    QUIZ_STATE_START,
+    QUIZ_STATE_QUESTION,
+    QUIZ_STATE_FEEDBACK,
+    QUIZ_STATE_RESULT
+} quiz_state_t;
+
+static struct {
+    quiz_state_t state;
+    uint8_t indices[10];
+    uint8_t current;     // 0-9
+    uint8_t score;
+} quiz_session;
+
 // Screen state
 typedef enum {
     SCREEN_HOME,
@@ -429,7 +466,8 @@ typedef enum {
     SCREEN_JIRA,
     SCREEN_JIRA_TIMER,
     SCREEN_WEATHER,
-    SCREEN_CALENDAR
+    SCREEN_CALENDAR,
+    SCREEN_BTS_QUIZ
 } screen_state_t;
 static screen_state_t current_screen = SCREEN_HOME;
 
@@ -551,6 +589,20 @@ static void show_calendar_screen(void);
 static void update_calendar_display(void);
 static void calendar_back_cb(lv_event_t *e);
 static void calendar_log_cb(lv_event_t *e);
+
+// Forward declarations for BTS Quiz screen
+static void create_bts_quiz_ui(void);
+static void show_bts_quiz_screen(void);
+static void hide_bts_quiz_screen(void);
+static void bts_quiz_back_cb(lv_event_t *e);
+static void bts_quiz_start_cb(lv_event_t *e);
+static void bts_quiz_answer_cb(lv_event_t *e);
+static void bts_quiz_retry_cb(lv_event_t *e);
+static void bts_quiz_feedback_timer_cb(lv_timer_t *timer);
+static void bts_quiz_show_start(void);
+static void bts_quiz_show_question(void);
+static void bts_quiz_show_result(void);
+static void bts_quiz_select_questions(void);
 
 // Public functions for knob control (called from main sketch)
 void timer_knob_left(void) {
@@ -870,7 +922,7 @@ static const app_def_t apps[] = {
     {FK_ICON_JIRA,      &focusknob_icons_18, true},   // 3: Jira TimeLog
     {FK_ICON_CLOUD_SUN, &focusknob_icons_18, true},   // 4: Weather
     {FK_ICON_CALENDAR,  &focusknob_icons_18, true},   // 5: Calendar
-    {LV_SYMBOL_CHARGE,  NULL, false},                  // 6: Battery
+    {FK_ICON_MUSIC,     &focusknob_icons_18, true},   // 6: BTS Quiz
     {LV_SYMBOL_HOME,    NULL, false},                  // 7: Home
 };
 #define NUM_APPS 8
@@ -993,6 +1045,10 @@ static void menu_app_cb(lv_event_t *e)
         case 5: // Calendar
             hide_menu();
             show_calendar_screen();
+            break;
+        case 6: // BTS Quiz
+            hide_menu();
+            show_bts_quiz_screen();
             break;
         case 7: // Home
             hide_menu();
@@ -1307,6 +1363,8 @@ static void show_home_screen(void)
     if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
     // Hide calendar screen
     if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
+    // Hide BTS Quiz screen
+    if (bts_quiz_screen) lv_obj_add_flag(bts_quiz_screen, LV_OBJ_FLAG_HIDDEN);
     current_screen = SCREEN_HOME;
 }
 
@@ -3244,6 +3302,447 @@ void jira_hours_update_ui(void) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// BTS Quiz screen
+// ═══════════════════════════════════════════════════════════════════
+
+static void bts_quiz_select_questions(void) {
+    // Pick 10 random questions: ~3 easy, ~4 medium, ~3 hard
+    uint8_t easy[BTS_QUESTION_COUNT], med[BTS_QUESTION_COUNT], hard[BTS_QUESTION_COUNT];
+    uint8_t ne = 0, nm = 0, nh = 0;
+
+    for (int i = 0; i < BTS_QUESTION_COUNT; i++) {
+        switch (BTS_QUESTIONS[i].difficulty) {
+            case QUIZ_EASY:   easy[ne++] = i; break;
+            case QUIZ_MEDIUM: med[nm++] = i;  break;
+            case QUIZ_HARD:   hard[nh++] = i; break;
+        }
+    }
+
+    // Fisher-Yates partial shuffle each pool
+    for (int i = ne - 1; i > 0; i--) {
+        int j = esp_random() % (i + 1);
+        uint8_t t = easy[i]; easy[i] = easy[j]; easy[j] = t;
+    }
+    for (int i = nm - 1; i > 0; i--) {
+        int j = esp_random() % (i + 1);
+        uint8_t t = med[i]; med[i] = med[j]; med[j] = t;
+    }
+    for (int i = nh - 1; i > 0; i--) {
+        int j = esp_random() % (i + 1);
+        uint8_t t = hard[i]; hard[i] = hard[j]; hard[j] = t;
+    }
+
+    // Pick 3 easy, 4 medium, 3 hard
+    int idx = 0;
+    for (int i = 0; i < 3 && i < ne; i++) quiz_session.indices[idx++] = easy[i];
+    for (int i = 0; i < 4 && i < nm; i++) quiz_session.indices[idx++] = med[i];
+    for (int i = 0; i < 3 && i < nh; i++) quiz_session.indices[idx++] = hard[i];
+
+    // Shuffle the 10 selected questions
+    for (int i = 9; i > 0; i--) {
+        int j = esp_random() % (i + 1);
+        uint8_t t = quiz_session.indices[i];
+        quiz_session.indices[i] = quiz_session.indices[j];
+        quiz_session.indices[j] = t;
+    }
+}
+
+static void bts_quiz_show_start(void) {
+    quiz_session.state = QUIZ_STATE_START;
+
+    // Show start elements
+    if (bts_start_title) lv_obj_clear_flag(bts_start_title, LV_OBJ_FLAG_HIDDEN);
+    if (bts_start_subtitle) lv_obj_clear_flag(bts_start_subtitle, LV_OBJ_FLAG_HIDDEN);
+    if (bts_start_btn) lv_obj_clear_flag(bts_start_btn, LV_OBJ_FLAG_HIDDEN);
+    if (bts_back_btn) lv_obj_clear_flag(bts_back_btn, LV_OBJ_FLAG_HIDDEN);
+
+    // Hide question elements
+    if (bts_q_progress) lv_obj_add_flag(bts_q_progress, LV_OBJ_FLAG_HIDDEN);
+    if (bts_q_difficulty) lv_obj_add_flag(bts_q_difficulty, LV_OBJ_FLAG_HIDDEN);
+    if (bts_q_text) lv_obj_add_flag(bts_q_text, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 4; i++) {
+        if (bts_q_btns[i]) lv_obj_add_flag(bts_q_btns[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Hide result elements
+    if (bts_r_title) lv_obj_add_flag(bts_r_title, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_score) lv_obj_add_flag(bts_r_score, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_pct) lv_obj_add_flag(bts_r_pct, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_retry_btn) lv_obj_add_flag(bts_r_retry_btn, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_back_btn) lv_obj_add_flag(bts_r_back_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void bts_quiz_show_question(void) {
+    quiz_session.state = QUIZ_STATE_QUESTION;
+    const bts_question_t* q = &BTS_QUESTIONS[quiz_session.indices[quiz_session.current]];
+
+    // Hide start elements
+    if (bts_start_title) lv_obj_add_flag(bts_start_title, LV_OBJ_FLAG_HIDDEN);
+    if (bts_start_subtitle) lv_obj_add_flag(bts_start_subtitle, LV_OBJ_FLAG_HIDDEN);
+    if (bts_start_btn) lv_obj_add_flag(bts_start_btn, LV_OBJ_FLAG_HIDDEN);
+    // Hide result elements
+    if (bts_r_title) lv_obj_add_flag(bts_r_title, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_score) lv_obj_add_flag(bts_r_score, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_pct) lv_obj_add_flag(bts_r_pct, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_retry_btn) lv_obj_add_flag(bts_r_retry_btn, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_back_btn) lv_obj_add_flag(bts_r_back_btn, LV_OBJ_FLAG_HIDDEN);
+
+    // Show question elements
+    if (bts_q_progress) {
+        lv_obj_clear_flag(bts_q_progress, LV_OBJ_FLAG_HIDDEN);
+        static char pbuf[16];
+        snprintf(pbuf, sizeof(pbuf), "Q %d / 10", quiz_session.current + 1);
+        lv_label_set_text(bts_q_progress, pbuf);
+    }
+    if (bts_q_difficulty) {
+        lv_obj_clear_flag(bts_q_difficulty, LV_OBJ_FLAG_HIDDEN);
+        const char* diff_str = q->difficulty == QUIZ_EASY ? "EASY" :
+                               q->difficulty == QUIZ_MEDIUM ? "MEDIUM" : "HARD";
+        lv_label_set_text(bts_q_difficulty, diff_str);
+        uint32_t diff_color = q->difficulty == QUIZ_EASY ? 0x2ecc71 :
+                              q->difficulty == QUIZ_MEDIUM ? 0xf39c12 : 0xe74c3c;
+        lv_obj_set_style_text_color(bts_q_difficulty, lv_color_hex(diff_color), 0);
+    }
+    if (bts_q_text) {
+        lv_obj_clear_flag(bts_q_text, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(bts_q_text, q->question);
+    }
+
+    // Show and reset answer buttons
+    const char* prefix[] = {"A) ", "B) ", "C) ", "D) "};
+    for (int i = 0; i < 4; i++) {
+        if (bts_q_btns[i]) {
+            lv_obj_clear_flag(bts_q_btns[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_state(bts_q_btns[i], LV_STATE_DISABLED);
+            lv_obj_set_style_bg_color(bts_q_btns[i], lv_color_hex(0x16213e), 0);
+            lv_obj_set_style_bg_opa(bts_q_btns[i], LV_OPA_COVER, 0);
+        }
+        if (bts_q_btn_labels[i]) {
+            static char abuf[4][80];
+            snprintf(abuf[i], sizeof(abuf[i]), "%s%s", prefix[i], q->answers[i]);
+            lv_label_set_text(bts_q_btn_labels[i], abuf[i]);
+            lv_obj_set_style_text_color(bts_q_btn_labels[i], COLOR_TEXT, 0);
+        }
+    }
+
+    // Keep back button visible
+    if (bts_back_btn) lv_obj_clear_flag(bts_back_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void bts_quiz_show_result(void) {
+    quiz_session.state = QUIZ_STATE_RESULT;
+
+    // Hide start elements
+    if (bts_start_title) lv_obj_add_flag(bts_start_title, LV_OBJ_FLAG_HIDDEN);
+    if (bts_start_subtitle) lv_obj_add_flag(bts_start_subtitle, LV_OBJ_FLAG_HIDDEN);
+    if (bts_start_btn) lv_obj_add_flag(bts_start_btn, LV_OBJ_FLAG_HIDDEN);
+
+    // Hide question elements
+    if (bts_q_progress) lv_obj_add_flag(bts_q_progress, LV_OBJ_FLAG_HIDDEN);
+    if (bts_q_difficulty) lv_obj_add_flag(bts_q_difficulty, LV_OBJ_FLAG_HIDDEN);
+    if (bts_q_text) lv_obj_add_flag(bts_q_text, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 4; i++) {
+        if (bts_q_btns[i]) lv_obj_add_flag(bts_q_btns[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    if (bts_back_btn) lv_obj_add_flag(bts_back_btn, LV_OBJ_FLAG_HIDDEN);
+
+    // Show result elements
+    if (bts_r_title) lv_obj_clear_flag(bts_r_title, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_score) {
+        lv_obj_clear_flag(bts_r_score, LV_OBJ_FLAG_HIDDEN);
+        static char sbuf[8];
+        snprintf(sbuf, sizeof(sbuf), "%d/10", quiz_session.score);
+        lv_label_set_text(bts_r_score, sbuf);
+
+        // Color code score
+        if (quiz_session.score >= 8) {
+            lv_obj_set_style_text_color(bts_r_score, lv_color_hex(0x2ecc71), 0);
+        } else if (quiz_session.score >= 5) {
+            lv_obj_set_style_text_color(bts_r_score, lv_color_hex(0xf39c12), 0);
+        } else {
+            lv_obj_set_style_text_color(bts_r_score, lv_color_hex(0xe74c3c), 0);
+        }
+    }
+    if (bts_r_pct) {
+        lv_obj_clear_flag(bts_r_pct, LV_OBJ_FLAG_HIDDEN);
+        static char pctbuf[16];
+        snprintf(pctbuf, sizeof(pctbuf), "%d%%", quiz_session.score * 10);
+        lv_label_set_text(bts_r_pct, pctbuf);
+    }
+    if (bts_r_retry_btn) lv_obj_clear_flag(bts_r_retry_btn, LV_OBJ_FLAG_HIDDEN);
+    if (bts_r_back_btn) lv_obj_clear_flag(bts_r_back_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void bts_quiz_feedback_timer_cb(lv_timer_t *timer) {
+    (void)timer;
+    quiz_session.current++;
+    if (quiz_session.current >= 10) {
+        bts_quiz_show_result();
+    } else {
+        bts_quiz_show_question();
+    }
+}
+
+static void bts_quiz_answer_cb(lv_event_t *e) {
+    if (quiz_session.state != QUIZ_STATE_QUESTION) return;
+
+    int answer_idx = (int)(intptr_t)lv_event_get_user_data(e);
+    const bts_question_t* q = &BTS_QUESTIONS[quiz_session.indices[quiz_session.current]];
+    bool correct = (answer_idx == q->correct);
+
+    if (correct) quiz_session.score++;
+
+    quiz_session.state = QUIZ_STATE_FEEDBACK;
+
+    // Disable all buttons and color them
+    for (int i = 0; i < 4; i++) {
+        if (bts_q_btns[i]) {
+            lv_obj_add_state(bts_q_btns[i], LV_STATE_DISABLED);
+            if (i == q->correct) {
+                // Correct answer: green
+                lv_obj_set_style_bg_color(bts_q_btns[i], lv_color_hex(0x2ecc71), 0);
+            } else if (i == answer_idx && !correct) {
+                // Wrong selection: red
+                lv_obj_set_style_bg_color(bts_q_btns[i], lv_color_hex(0xe74c3c), 0);
+            }
+        }
+    }
+
+    // Auto-advance after 1.5 seconds
+    lv_timer_t *t = lv_timer_create(bts_quiz_feedback_timer_cb, 1500, NULL);
+    lv_timer_set_repeat_count(t, 1);
+}
+
+static void bts_quiz_start_cb(lv_event_t *e) {
+    (void)e;
+    quiz_session.current = 0;
+    quiz_session.score = 0;
+    bts_quiz_select_questions();
+    bts_quiz_show_question();
+}
+
+static void bts_quiz_retry_cb(lv_event_t *e) {
+    (void)e;
+    quiz_session.current = 0;
+    quiz_session.score = 0;
+    bts_quiz_select_questions();
+    bts_quiz_show_question();
+}
+
+static void bts_quiz_back_cb(lv_event_t *e) {
+    (void)e;
+    show_home_screen();
+}
+
+static void show_bts_quiz_screen(void) {
+    // Hide all other screens
+    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
+    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
+    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
+    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
+    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
+    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
+    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
+    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
+    if (wifi_screen) lv_obj_add_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
+    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
+    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
+    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
+    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
+    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
+
+    // Show quiz screen
+    if (bts_quiz_screen) lv_obj_clear_flag(bts_quiz_screen, LV_OBJ_FLAG_HIDDEN);
+    bts_quiz_show_start();
+    current_screen = SCREEN_BTS_QUIZ;
+}
+
+static void hide_bts_quiz_screen(void) {
+    if (bts_quiz_screen) lv_obj_add_flag(bts_quiz_screen, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool is_bts_quiz_screen_active(void) {
+    return current_screen == SCREEN_BTS_QUIZ;
+}
+
+static void create_bts_quiz_ui(void) {
+    lv_obj_t *scr = lv_scr_act();
+
+    // Main container
+    bts_quiz_screen = lv_obj_create(scr);
+    lv_obj_set_size(bts_quiz_screen, 360, 360);
+    lv_obj_center(bts_quiz_screen);
+    lv_obj_set_style_bg_color(bts_quiz_screen, COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(bts_quiz_screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(bts_quiz_screen, 0, 0);
+    lv_obj_set_style_radius(bts_quiz_screen, 180, 0);
+    lv_obj_set_style_pad_all(bts_quiz_screen, 0, 0);
+    lv_obj_clear_flag(bts_quiz_screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(bts_quiz_screen, LV_OBJ_FLAG_HIDDEN);
+
+    // ── START SCREEN ELEMENTS ──
+
+    // Title: music icon + "BTS QUIZ"
+    bts_start_title = lv_label_create(bts_quiz_screen);
+    lv_obj_set_style_text_font(bts_start_title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(bts_start_title, lv_color_hex(0x9b59b6), 0);
+    lv_obj_align(bts_start_title, LV_ALIGN_CENTER, 0, -60);
+    lv_label_set_text(bts_start_title, "BTS QUIZ");
+
+    // Subtitle
+    bts_start_subtitle = lv_label_create(bts_quiz_screen);
+    lv_obj_set_style_text_font(bts_start_subtitle, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(bts_start_subtitle, COLOR_TEXT_DIM, 0);
+    lv_obj_align(bts_start_subtitle, LV_ALIGN_CENTER, 0, -25);
+    lv_label_set_text(bts_start_subtitle, "200 Questions \xE2\x80\xA2 3 Difficulties");
+
+    // START button
+    bts_start_btn = lv_btn_create(bts_quiz_screen);
+    lv_obj_set_size(bts_start_btn, 140, 50);
+    lv_obj_align(bts_start_btn, LV_ALIGN_CENTER, 0, 30);
+    lv_obj_set_style_bg_color(bts_start_btn, lv_color_hex(0x9b59b6), 0);
+    lv_obj_set_style_radius(bts_start_btn, 25, 0);
+    lv_obj_set_style_shadow_width(bts_start_btn, 0, 0);
+    lv_obj_set_style_border_width(bts_start_btn, 0, 0);
+    lv_obj_add_event_cb(bts_start_btn, bts_quiz_start_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *start_lbl = lv_label_create(bts_start_btn);
+    lv_obj_set_style_text_font(start_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(start_lbl, COLOR_TEXT, 0);
+    lv_label_set_text(start_lbl, "START");
+    lv_obj_center(start_lbl);
+
+    // Back button (shared across start and question screens)
+    bts_back_btn = lv_btn_create(bts_quiz_screen);
+    lv_obj_set_size(bts_back_btn, 50, 50);
+    lv_obj_align(bts_back_btn, LV_ALIGN_BOTTOM_MID, 0, -15);
+    lv_obj_set_style_bg_opa(bts_back_btn, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_shadow_width(bts_back_btn, 0, 0);
+    lv_obj_set_style_border_width(bts_back_btn, 0, 0);
+    lv_obj_add_event_cb(bts_back_btn, bts_quiz_back_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *bk_lbl = lv_label_create(bts_back_btn);
+    lv_label_set_text(bk_lbl, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(bk_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(bk_lbl, COLOR_TEXT, 0);
+    lv_obj_center(bk_lbl);
+
+    // ── QUESTION SCREEN ELEMENTS ──
+
+    // Progress label "Q 3/10"
+    bts_q_progress = lv_label_create(bts_quiz_screen);
+    lv_obj_set_style_text_font(bts_q_progress, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(bts_q_progress, COLOR_TEXT_DIM, 0);
+    lv_obj_align(bts_q_progress, LV_ALIGN_TOP_MID, -30, 45);
+    lv_label_set_text(bts_q_progress, "");
+    lv_obj_add_flag(bts_q_progress, LV_OBJ_FLAG_HIDDEN);
+
+    // Difficulty badge
+    bts_q_difficulty = lv_label_create(bts_quiz_screen);
+    lv_obj_set_style_text_font(bts_q_difficulty, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(bts_q_difficulty, lv_color_hex(0x2ecc71), 0);
+    lv_obj_align(bts_q_difficulty, LV_ALIGN_TOP_MID, 40, 45);
+    lv_label_set_text(bts_q_difficulty, "");
+    lv_obj_add_flag(bts_q_difficulty, LV_OBJ_FLAG_HIDDEN);
+
+    // Question text (wrapping, centered)
+    bts_q_text = lv_label_create(bts_quiz_screen);
+    lv_obj_set_style_text_font(bts_q_text, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(bts_q_text, COLOR_TEXT, 0);
+    lv_obj_set_width(bts_q_text, 260);
+    lv_obj_set_style_text_align(bts_q_text, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(bts_q_text, LV_LABEL_LONG_WRAP);
+    lv_obj_align(bts_q_text, LV_ALIGN_TOP_MID, 0, 70);
+    lv_label_set_text(bts_q_text, "");
+    lv_obj_add_flag(bts_q_text, LV_OBJ_FLAG_HIDDEN);
+
+    // 4 answer buttons
+    for (int i = 0; i < 4; i++) {
+        bts_q_btns[i] = lv_btn_create(bts_quiz_screen);
+        lv_obj_set_size(bts_q_btns[i], 250, 38);
+        lv_obj_align(bts_q_btns[i], LV_ALIGN_TOP_MID, 0, 145 + i * 44);
+        lv_obj_set_style_bg_color(bts_q_btns[i], lv_color_hex(0x16213e), 0);
+        lv_obj_set_style_bg_opa(bts_q_btns[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(bts_q_btns[i], 8, 0);
+        lv_obj_set_style_shadow_width(bts_q_btns[i], 0, 0);
+        lv_obj_set_style_border_color(bts_q_btns[i], lv_color_hex(0x2c3e50), 0);
+        lv_obj_set_style_border_width(bts_q_btns[i], 1, 0);
+        lv_obj_add_event_cb(bts_q_btns[i], bts_quiz_answer_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+        lv_obj_add_flag(bts_q_btns[i], LV_OBJ_FLAG_HIDDEN);
+
+        bts_q_btn_labels[i] = lv_label_create(bts_q_btns[i]);
+        lv_obj_set_style_text_font(bts_q_btn_labels[i], &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(bts_q_btn_labels[i], COLOR_TEXT, 0);
+        lv_obj_set_width(bts_q_btn_labels[i], 230);
+        lv_label_set_long_mode(bts_q_btn_labels[i], LV_LABEL_LONG_DOT);
+        lv_obj_align(bts_q_btn_labels[i], LV_ALIGN_LEFT_MID, 8, 0);
+        lv_label_set_text(bts_q_btn_labels[i], "");
+    }
+
+    // ── RESULT SCREEN ELEMENTS ──
+
+    // "YOUR SCORE" title
+    bts_r_title = lv_label_create(bts_quiz_screen);
+    lv_obj_set_style_text_font(bts_r_title, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(bts_r_title, lv_color_hex(0x9b59b6), 0);
+    lv_obj_set_style_text_letter_space(bts_r_title, 3, 0);
+    lv_obj_align(bts_r_title, LV_ALIGN_CENTER, 0, -70);
+    lv_label_set_text(bts_r_title, "YOUR SCORE");
+    lv_obj_add_flag(bts_r_title, LV_OBJ_FLAG_HIDDEN);
+
+    // Big score number
+    bts_r_score = lv_label_create(bts_quiz_screen);
+    lv_obj_set_style_text_font(bts_r_score, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(bts_r_score, COLOR_TEXT, 0);
+    lv_obj_align(bts_r_score, LV_ALIGN_CENTER, 0, -15);
+    lv_label_set_text(bts_r_score, "0/10");
+    lv_obj_add_flag(bts_r_score, LV_OBJ_FLAG_HIDDEN);
+
+    // Percentage
+    bts_r_pct = lv_label_create(bts_quiz_screen);
+    lv_obj_set_style_text_font(bts_r_pct, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(bts_r_pct, COLOR_TEXT_DIM, 0);
+    lv_obj_align(bts_r_pct, LV_ALIGN_CENTER, 0, 30);
+    lv_label_set_text(bts_r_pct, "0%");
+    lv_obj_add_flag(bts_r_pct, LV_OBJ_FLAG_HIDDEN);
+
+    // RETRY button
+    bts_r_retry_btn = lv_btn_create(bts_quiz_screen);
+    lv_obj_set_size(bts_r_retry_btn, 100, 40);
+    lv_obj_align(bts_r_retry_btn, LV_ALIGN_CENTER, -60, 80);
+    lv_obj_set_style_bg_color(bts_r_retry_btn, lv_color_hex(0x9b59b6), 0);
+    lv_obj_set_style_radius(bts_r_retry_btn, 20, 0);
+    lv_obj_set_style_shadow_width(bts_r_retry_btn, 0, 0);
+    lv_obj_set_style_border_width(bts_r_retry_btn, 0, 0);
+    lv_obj_add_event_cb(bts_r_retry_btn, bts_quiz_retry_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(bts_r_retry_btn, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *retry_lbl = lv_label_create(bts_r_retry_btn);
+    lv_obj_set_style_text_font(retry_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(retry_lbl, COLOR_TEXT, 0);
+    lv_label_set_text(retry_lbl, "RETRY");
+    lv_obj_center(retry_lbl);
+
+    // BACK button (result screen)
+    bts_r_back_btn = lv_btn_create(bts_quiz_screen);
+    lv_obj_set_size(bts_r_back_btn, 100, 40);
+    lv_obj_align(bts_r_back_btn, LV_ALIGN_CENTER, 60, 80);
+    lv_obj_set_style_bg_color(bts_r_back_btn, lv_color_hex(0x16213e), 0);
+    lv_obj_set_style_radius(bts_r_back_btn, 20, 0);
+    lv_obj_set_style_shadow_width(bts_r_back_btn, 0, 0);
+    lv_obj_set_style_border_color(bts_r_back_btn, lv_color_hex(0x2c3e50), 0);
+    lv_obj_set_style_border_width(bts_r_back_btn, 1, 0);
+    lv_obj_add_event_cb(bts_r_back_btn, bts_quiz_back_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(bts_r_back_btn, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *rback_lbl = lv_label_create(bts_r_back_btn);
+    lv_obj_set_style_text_font(rback_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(rback_lbl, COLOR_TEXT, 0);
+    lv_label_set_text(rback_lbl, "HOME");
+    lv_obj_center(rback_lbl);
+}
+
 void lcd_lvgl_Init(void)
 {
   static lv_disp_draw_buf_t disp_buf;
@@ -3350,6 +3849,8 @@ void lcd_lvgl_Init(void)
     create_weather_ui();
     // Create Calendar UI (hidden initially)
     create_calendar_ui();
+    // Create BTS Quiz UI (hidden initially)
+    create_bts_quiz_ui();
     // Hide timer UI initially
     if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
     if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);

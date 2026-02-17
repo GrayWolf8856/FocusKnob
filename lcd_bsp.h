@@ -60,6 +60,9 @@ bool is_calendar_screen_active(void);
 // Called by USB sync when Jira hours data arrives
 void jira_hours_update_ui(void);
 
+// BTS Quiz screen state check
+bool is_bts_quiz_screen_active(void);
+
 // Touch function (from cst816)
 uint8_t getTouch(uint16_t *x, uint16_t *y);
 
