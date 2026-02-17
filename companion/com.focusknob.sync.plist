@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.focusknob.sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/kecospe/Desktop/FocusKnob/companion/focusknob_sync.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kecospe/Library/Logs/FocusKnob/sync.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kecospe/Library/Logs/FocusKnob/sync.error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NOTION_TOKEN</key>
+        <string>YOUR_NOTION_TOKEN_HERE</string>
+        <key>NOTION_DATABASE_ID</key>
+        <string>YOUR_DATABASE_ID_HERE</string>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -4,6 +4,8 @@
  * Features:
  * - Visual countdown timer with arc display
  * - Knob control: rotate to adjust time, press to start/pause
+ * - WiFi AP mode for configuration
+ * - USB serial sync with companion app
  */
 
 #include "freertos/FreeRTOS.h"
@@ -12,6 +14,12 @@
 #include "lcd_bsp.h"
 #include "lcd_bl_pwm_bsp.h"
 #include "bidi_switch_knob.h"
+#include "wifi_config.h"
+#include "usb_sync.h"
+#include "jira_data.h"
+#include "weather_data.h"
+#include "calendar_data.h"
+#include "jira_hours_data.h"
 
 // Encoder pins
 #define ENCODER_PIN_A    8
@@ -45,10 +53,18 @@ static void input_task(void *arg) {
         );
 
         if (bits & KNOB_LEFT_BIT) {
-            timer_knob_left();
+            if (is_jira_screen_active() || is_jira_picker_open() || is_jira_timer_screen_active()) {
+                jira_knob_left();
+            } else {
+                timer_knob_left();
+            }
         }
         if (bits & KNOB_RIGHT_BIT) {
-            timer_knob_right();
+            if (is_jira_screen_active() || is_jira_picker_open() || is_jira_timer_screen_active()) {
+                jira_knob_right();
+            } else {
+                timer_knob_right();
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -56,6 +72,7 @@ static void input_task(void *arg) {
 }
 
 void setup() {
+    Serial.setRxBufferSize(2048);  // Need larger buffer for JIRA_PROJECTS JSON
     Serial.begin(115200);
     Serial.println("Pomodoro Timer Starting...");
 
@@ -86,6 +103,24 @@ void setup() {
     // Create input handling task
     xTaskCreate(input_task, "input_task", 2048, NULL, 2, NULL);
 
+    // Initialize WiFi config system
+    wifi_config_init();
+
+    // Initialize USB sync
+    usb_sync_init();
+
+    // Initialize Jira data cache
+    jira_data_init();
+
+    // Initialize weather data cache
+    weather_data_init();
+
+    // Initialize calendar data cache
+    calendar_data_init();
+
+    // Initialize Jira hours data cache
+    jira_hours_data_init();
+
     Serial.println("Pomodoro Timer Ready!");
 }
 
@@ -96,16 +131,25 @@ void loop() {
     bool current_touch_state = getTouch(&touch_x, &touch_y);
 
     if (current_touch_state && !last_touch_state) {
-        // Touch started - only trigger timer action if on timer screen
+        // Touch started - trigger action based on active screen
         // Skip if touch is in menu trigger zone (top 60 pixels after rotation)
         // Touch Y is inverted (360 - y), so top zone is when rotated_y < 60
         uint16_t rotated_y = 359 - touch_y;
         if (is_timer_screen_active() && rotated_y >= 60) {
             timer_knob_press();
             delay(200);  // Debounce to prevent multiple triggers
+        } else if (is_jira_timer_screen_active() && rotated_y >= 60) {
+            jira_knob_press();
+            delay(200);
         }
     }
     last_touch_state = current_touch_state;
+
+    // Process WiFi web server requests
+    wifi_config_process();
+
+    // Process USB serial commands
+    usb_sync_process();
 
     vTaskDelay(pdMS_TO_TICKS(20));
 }

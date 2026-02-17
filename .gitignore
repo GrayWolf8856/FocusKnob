@@ -19,3 +19,7 @@ build/
 
 # Arduino
 *.d
+
+# Credentials / secrets
+companion/config.json
+companion/msal_token_cache.json
