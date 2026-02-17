@@ -867,7 +867,7 @@ static const app_def_t apps[] = {
     {FK_ICON_CLOCK,     &focusknob_icons_18, true},   // 0: Pomodoro Timer (top)
     {LV_SYMBOL_LIST,    NULL, true},                   // 1: Time Log
     {LV_SYMBOL_WIFI,    NULL, true},                   // 2: WiFi
-    {FK_ICON_CLIPBOARD, &focusknob_icons_18, true},   // 3: Jira TimeLog
+    {FK_ICON_JIRA,      &focusknob_icons_18, true},   // 3: Jira TimeLog
     {FK_ICON_CLOUD_SUN, &focusknob_icons_18, true},   // 4: Weather
     {FK_ICON_CALENDAR,  &focusknob_icons_18, true},   // 5: Calendar
     {LV_SYMBOL_CHARGE,  NULL, false},                  // 6: Battery
