@@ -511,6 +511,101 @@ static void apply_theme(void);
 static void create_splash_ui(void);
 static void splash_anim_cb(lv_timer_t *timer);
 
+// ── Animation & Transition Helpers ──
+// Opacity animation callback for screen fade-in
+static void opa_anim_cb(void *obj, int32_t v) {
+    lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
+
+// Fade a screen in over duration_ms (with ease-out)
+static void screen_fade_in(lv_obj_t *screen, uint16_t duration_ms) {
+    if (!screen) return;
+    lv_obj_set_style_opa(screen, LV_OPA_TRANSP, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, screen);
+    lv_anim_set_exec_cb(&a, opa_anim_cb);
+    lv_anim_set_values(&a, 0, 255);
+    lv_anim_set_time(&a, duration_ms);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
+// Generic anim-done callback: hides the object and resets opacity
+static void anim_hide_obj_cb(lv_anim_t *a) {
+    lv_obj_t *obj = (lv_obj_t *)a->var;
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_opa(obj, LV_OPA_COVER, 0);
+}
+
+// X-translate animation callback for shake effect
+static void translate_x_anim_cb(void *obj, int32_t v) {
+    lv_obj_set_style_translate_x((lv_obj_t *)obj, v, 0);
+}
+
+// Shake an object left-right (for wrong answers)
+static void obj_shake(lv_obj_t *obj) {
+    if (!obj) return;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_exec_cb(&a, translate_x_anim_cb);
+    lv_anim_set_values(&a, -6, 6);
+    lv_anim_set_time(&a, 80);
+    lv_anim_set_playback_time(&a, 80);
+    lv_anim_set_repeat_count(&a, 2);
+    lv_anim_start(&a);
+}
+
+// Hide all major screens (consolidates duplicated code)
+static void hide_all_screens(void) {
+    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
+    // Timer elements (not in their own container)
+    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
+    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
+    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
+    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
+    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
+    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
+    // Screens with containers
+    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
+    if (wifi_screen) lv_obj_add_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
+    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
+    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
+    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
+    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
+    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
+    if (bts_quiz_screen) lv_obj_add_flag(bts_quiz_screen, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ── Button style helpers for pressed feedback ──
+static lv_style_t style_btn_pressed;
+static lv_style_transition_dsc_t trans_btn;
+static const lv_style_prop_t trans_props[] = {LV_STYLE_OPA, LV_STYLE_TRANSFORM_WIDTH, LV_STYLE_TRANSFORM_HEIGHT, LV_STYLE_PROP_INV};
+static bool btn_styles_initialized = false;
+
+static void init_btn_press_styles(void) {
+    if (btn_styles_initialized) return;
+    btn_styles_initialized = true;
+
+    lv_style_transition_dsc_init(&trans_btn, trans_props, lv_anim_path_ease_in_out, 100, 0, NULL);
+
+    lv_style_init(&style_btn_pressed);
+    lv_style_set_opa(&style_btn_pressed, LV_OPA_70);
+    lv_style_set_transform_width(&style_btn_pressed, -2);
+    lv_style_set_transform_height(&style_btn_pressed, -2);
+    lv_style_set_transition(&style_btn_pressed, &trans_btn);
+}
+
+// Apply press feedback style to a button
+static void apply_btn_press_style(lv_obj_t *btn) {
+    if (!btn) return;
+    init_btn_press_styles();
+    lv_obj_add_style(btn, &style_btn_pressed, LV_STATE_PRESSED);
+    // Also add transition to default state so release is smooth
+    lv_obj_set_style_transition(btn, &trans_btn, 0);
+}
+
 // Forward declarations for home screen
 static void create_home_ui(void);
 static void update_clock(lv_timer_t *timer);
@@ -778,8 +873,16 @@ static void splash_anim_cb(lv_timer_t *timer)
         lv_timer_del(splash_timer);
         splash_timer = NULL;
 
-        // Hide splash, show home
-        lv_obj_add_flag(splash_screen, LV_OBJ_FLAG_HIDDEN);
+        // Fade out splash, then show home
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, splash_screen);
+        lv_anim_set_exec_cb(&a, opa_anim_cb);
+        lv_anim_set_values(&a, 255, 0);
+        lv_anim_set_time(&a, 400);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+        lv_anim_set_ready_cb(&a, anim_hide_obj_cb);  // Hides obj when done
+        lv_anim_start(&a);
         show_home_screen();
     }
 }
@@ -935,8 +1038,10 @@ static void create_menu_ui(void)
     menu_overlay = lv_obj_create(screen);
     lv_obj_set_size(menu_overlay, 360, 360);
     lv_obj_center(menu_overlay);
-    lv_obj_set_style_bg_color(menu_overlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(menu_overlay, lv_color_hex(0x0a0a1a), 0);
     lv_obj_set_style_bg_opa(menu_overlay, LV_OPA_80, 0);
+    lv_obj_set_style_bg_grad_color(menu_overlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_grad_dir(menu_overlay, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_width(menu_overlay, 0, 0);
     lv_obj_set_style_radius(menu_overlay, 180, 0);
     lv_obj_add_flag(menu_overlay, LV_OBJ_FLAG_HIDDEN);
@@ -959,8 +1064,11 @@ static void create_menu_ui(void)
     lv_obj_set_style_bg_opa(center_btn, LV_OPA_20, 0);
     lv_obj_set_style_radius(center_btn, 30, 0);
     lv_obj_set_style_border_width(center_btn, 0, 0);
-    lv_obj_set_style_shadow_width(center_btn, 0, 0);
+    lv_obj_set_style_shadow_width(center_btn, 12, 0);
+    lv_obj_set_style_shadow_color(center_btn, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(center_btn, LV_OPA_30, 0);
     lv_obj_add_event_cb(center_btn, menu_app_cb, LV_EVENT_CLICKED, (void*)(intptr_t)99);  // 99 = settings
+    apply_btn_press_style(center_btn);
 
     lv_obj_t *center_lbl = lv_label_create(center_btn);
     lv_label_set_text(center_lbl, LV_SYMBOL_SETTINGS);
@@ -986,8 +1094,13 @@ static void create_menu_ui(void)
         lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
         lv_obj_set_style_radius(btn, btn_size / 2, 0);
         lv_obj_set_style_border_width(btn, 0, 0);
-        lv_obj_set_style_shadow_width(btn, 0, 0);
+        // Soft shadow for depth
+        lv_obj_set_style_shadow_width(btn, 15, 0);
+        lv_obj_set_style_shadow_color(btn, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
+        lv_obj_set_style_shadow_spread(btn, 2, 0);
         lv_obj_add_event_cb(btn, menu_app_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+        apply_btn_press_style(btn);
 
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, apps[i].icon);
@@ -1001,6 +1114,16 @@ static void show_menu(void)
 {
     if (!menu_open && menu_overlay != NULL) {
         lv_obj_clear_flag(menu_overlay, LV_OBJ_FLAG_HIDDEN);
+        // Fade in overlay
+        lv_obj_set_style_opa(menu_overlay, LV_OPA_TRANSP, 0);
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, menu_overlay);
+        lv_anim_set_exec_cb(&a, opa_anim_cb);
+        lv_anim_set_values(&a, 0, 255);
+        lv_anim_set_time(&a, 200);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_start(&a);
         menu_open = true;
     }
 }
@@ -1008,7 +1131,16 @@ static void show_menu(void)
 static void hide_menu(void)
 {
     if (menu_open && menu_overlay != NULL) {
-        lv_obj_add_flag(menu_overlay, LV_OBJ_FLAG_HIDDEN);
+        // Fade out then hide
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, menu_overlay);
+        lv_anim_set_exec_cb(&a, opa_anim_cb);
+        lv_anim_set_values(&a, 255, 0);
+        lv_anim_set_time(&a, 150);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+        lv_anim_set_ready_cb(&a, anim_hide_obj_cb);
+        lv_anim_start(&a);
         menu_open = false;
     }
 }
@@ -1136,6 +1268,7 @@ static void show_settings(void)
 {
     if (!settings_open && settings_overlay != NULL) {
         lv_obj_clear_flag(settings_overlay, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(settings_overlay, 200);
         settings_open = true;
     }
 }
@@ -1143,7 +1276,15 @@ static void show_settings(void)
 static void hide_settings(void)
 {
     if (settings_open && settings_overlay != NULL) {
-        lv_obj_add_flag(settings_overlay, LV_OBJ_FLAG_HIDDEN);
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, settings_overlay);
+        lv_anim_set_exec_cb(&a, opa_anim_cb);
+        lv_anim_set_values(&a, 255, 0);
+        lv_anim_set_time(&a, 150);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+        lv_anim_set_ready_cb(&a, anim_hide_obj_cb);
+        lv_anim_start(&a);
         settings_open = false;
     }
 }
@@ -1196,6 +1337,24 @@ static void create_home_ui(void)
     lv_obj_set_style_pad_all(home_screen, 0, 0);
     lv_obj_clear_flag(home_screen, LV_OBJ_FLAG_SCROLLABLE);
 
+    // ── Background canvas (procedural gradient, rendered in PSRAM) ──
+    home_canvas_buf = (lv_color_t *)heap_caps_malloc(360 * 360 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    if (home_canvas_buf) {
+        home_bg_canvas = lv_canvas_create(home_screen);
+        lv_canvas_set_buffer(home_bg_canvas, home_canvas_buf, 360, 360, LV_IMG_CF_TRUE_COLOR);
+        lv_obj_center(home_bg_canvas);
+        home_bg_render(home_bg_canvas);
+    }
+
+    // ── Day of week shadow (for text depth) ──
+    home_day_shadow = lv_label_create(home_screen);
+    lv_obj_set_style_text_font(home_day_shadow, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(home_day_shadow, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(home_day_shadow, LV_OPA_40, 0);
+    lv_obj_set_style_text_letter_space(home_day_shadow, 4, 0);
+    lv_obj_align(home_day_shadow, LV_ALIGN_CENTER, 1, -61);
+    lv_label_set_text(home_day_shadow, "SUNDAY");
+
     // ── Day of week label ──
     home_day_label = lv_label_create(home_screen);
     lv_obj_set_style_text_font(home_day_label, &lv_font_montserrat_14, 0);
@@ -1204,12 +1363,28 @@ static void create_home_ui(void)
     lv_obj_align(home_day_label, LV_ALIGN_CENTER, 0, -62);
     lv_label_set_text(home_day_label, "SUNDAY");
 
+    // ── Time shadow (for text depth) ──
+    home_time_shadow = lv_label_create(home_screen);
+    lv_obj_set_style_text_font(home_time_shadow, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(home_time_shadow, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(home_time_shadow, LV_OPA_50, 0);
+    lv_obj_align(home_time_shadow, LV_ALIGN_CENTER, 2, -18);
+    lv_label_set_text(home_time_shadow, "12:00");
+
     // ── Time label (large) ──
     home_time_label = lv_label_create(home_screen);
     lv_obj_set_style_text_font(home_time_label, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(home_time_label, COLOR_TEXT, 0);
     lv_obj_align(home_time_label, LV_ALIGN_CENTER, 0, -20);
     lv_label_set_text(home_time_label, "12:00");
+
+    // ── Date shadow (for text depth) ──
+    home_date_shadow = lv_label_create(home_screen);
+    lv_obj_set_style_text_font(home_date_shadow, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(home_date_shadow, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(home_date_shadow, LV_OPA_40, 0);
+    lv_obj_align(home_date_shadow, LV_ALIGN_CENTER, 1, 36);
+    lv_label_set_text(home_date_shadow, "Jan 1, 2025");
 
     // ── Date label ──
     home_date_label = lv_label_create(home_screen);
@@ -1267,11 +1442,13 @@ static void update_clock(lv_timer_t *timer)
     static char time_buf[16];
     strftime(time_buf, sizeof(time_buf), "%I:%M %p", &timeinfo);
     lv_label_set_text(home_time_label, time_buf);
+    if (home_time_shadow) lv_label_set_text(home_time_shadow, time_buf);
 
     // Update date (Mon DD, YYYY format)
     static char date_buf[32];
     strftime(date_buf, sizeof(date_buf), "%b %d, %Y", &timeinfo);
     lv_label_set_text(home_date_label, date_buf);
+    if (home_date_shadow) lv_label_set_text(home_date_shadow, date_buf);
 
     // Update day of week (uppercase)
     static char day_buf[16];
@@ -1283,6 +1460,7 @@ static void update_clock(lv_timer_t *timer)
         }
     }
     if (home_day_label) lv_label_set_text(home_day_label, day_buf);
+    if (home_day_shadow) lv_label_set_text(home_day_shadow, day_buf);
 
     // Update home screen weather display (icon + temp + condition)
     if (weather_data_is_synced() && home_weather_icon && home_weather_temp) {
@@ -1345,43 +1523,23 @@ static void update_clock(lv_timer_t *timer)
 
 static void show_home_screen(void)
 {
-    if (home_screen) lv_obj_clear_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    // Hide timer elements
-    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
-    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
-    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
-    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
-    // Hide time log screen
-    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-    // Hide Jira screens
-    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-    // Hide weather screen
-    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
-    // Hide calendar screen
-    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
-    // Hide BTS Quiz screen
-    if (bts_quiz_screen) lv_obj_add_flag(bts_quiz_screen, LV_OBJ_FLAG_HIDDEN);
+    hide_all_screens();
+    if (home_screen) {
+        lv_obj_clear_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(home_screen, 250);
+    }
     current_screen = SCREEN_HOME;
 }
 
 static void show_timer_screen(void)
 {
-    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
-    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
-    // Show timer elements
+    hide_all_screens();
+    // Show timer elements (not in a container — fade arc individually)
     if (arc) lv_obj_clear_flag(arc, LV_OBJ_FLAG_HIDDEN);
     if (time_label) lv_obj_clear_flag(time_label, LV_OBJ_FLAG_HIDDEN);
     if (status_label) lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     if (hint_label) lv_obj_clear_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
+    screen_fade_in(arc, 250);
     // Buttons visibility handled by update_timer_display
     current_screen = SCREEN_TIMER;
     update_timer_display();
@@ -1484,27 +1642,12 @@ static void update_timelog_display(void)
 
 static void show_timelog_screen(void)
 {
-    // Hide other screens
-    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
-    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
-    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
-    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
-    if (wifi_screen) lv_obj_add_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
-    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
-
-    // Show time log screen
-    if (timelog_screen) lv_obj_clear_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-
-    // Update display
+    hide_all_screens();
+    if (timelog_screen) {
+        lv_obj_clear_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(timelog_screen, 250);
+    }
     update_timelog_display();
-
     current_screen = SCREEN_TIMELOG;
 }
 
@@ -1641,27 +1784,12 @@ static void update_wifi_display(void)
 
 static void show_wifi_screen(void)
 {
-    // Hide other screens
-    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
-    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
-    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
-    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
-    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
-    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
-
-    // Show WiFi screen
-    if (wifi_screen) lv_obj_clear_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
-
-    // Update display
+    hide_all_screens();
+    if (wifi_screen) {
+        lv_obj_clear_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(wifi_screen, 250);
+    }
     update_wifi_display();
-
     current_screen = SCREEN_WIFI;
 }
 
@@ -1980,22 +2108,11 @@ static void update_jira_display(void)
 
 static void show_jira_screen(void)
 {
-    // Hide all other screens
-    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
-    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
-    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
-    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
-    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-    if (wifi_screen) lv_obj_add_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
-    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
-
-    if (jira_screen) lv_obj_clear_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
+    hide_all_screens();
+    if (jira_screen) {
+        lv_obj_clear_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(jira_screen, 250);
+    }
     update_jira_display();
     current_screen = SCREEN_JIRA;
 }
@@ -2527,22 +2644,11 @@ static void update_jira_timer_display(void)
 
 static void show_jira_timer_screen(void)
 {
-    // Hide all other screens
-    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
-    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
-    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
-    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
-    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-    if (wifi_screen) lv_obj_add_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
-    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
-
-    if (jira_timer_screen) lv_obj_clear_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
+    hide_all_screens();
+    if (jira_timer_screen) {
+        lv_obj_clear_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(jira_timer_screen, 250);
+    }
     update_jira_timer_display();
     current_screen = SCREEN_JIRA_TIMER;
 }
@@ -2661,7 +2767,10 @@ static void show_jira_done_screen(void)
     lv_obj_set_style_text_color(jira_done_status_label, COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_color(jira_done_title_label, get_accent_color(), 0);
 
-    if (jira_done_screen) lv_obj_clear_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
+    if (jira_done_screen) {
+        lv_obj_clear_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(jira_done_screen, 250);
+    }
 
     // Start 30-second timeout
     if (jira_done_timeout_timer) {
@@ -2886,8 +2995,10 @@ static void create_weather_ui(void) {
     weather_screen = lv_obj_create(screen);
     lv_obj_set_size(weather_screen, 360, 360);
     lv_obj_center(weather_screen);
-    lv_obj_set_style_bg_color(weather_screen, COLOR_BG, 0);
+    lv_obj_set_style_bg_color(weather_screen, lv_color_hex(0x0d1b2a), 0);
     lv_obj_set_style_bg_opa(weather_screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_grad_color(weather_screen, lv_color_hex(0x1a1a2e), 0);
+    lv_obj_set_style_bg_grad_dir(weather_screen, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_width(weather_screen, 0, 0);
     lv_obj_set_style_radius(weather_screen, 180, 0);
     lv_obj_set_style_pad_all(weather_screen, 0, 0);
@@ -3036,21 +3147,11 @@ static void update_weather_display(void) {
 }
 
 static void show_weather_screen(void) {
-    // Hide all other screens
-    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
-    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
-    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
-    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
-    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-    if (wifi_screen) lv_obj_add_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-
-    if (weather_screen) lv_obj_clear_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
+    hide_all_screens();
+    if (weather_screen) {
+        lv_obj_clear_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(weather_screen, 250);
+    }
     update_weather_display();
     current_screen = SCREEN_WEATHER;
 }
@@ -3112,8 +3213,10 @@ static void create_calendar_ui(void) {
     calendar_screen = lv_obj_create(scr);
     lv_obj_set_size(calendar_screen, 360, 360);
     lv_obj_center(calendar_screen);
-    lv_obj_set_style_bg_color(calendar_screen, COLOR_BG, 0);
+    lv_obj_set_style_bg_color(calendar_screen, lv_color_hex(0x0a1628), 0);
     lv_obj_set_style_bg_opa(calendar_screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_grad_color(calendar_screen, lv_color_hex(0x1a1a2e), 0);
+    lv_obj_set_style_bg_grad_dir(calendar_screen, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_width(calendar_screen, 0, 0);
     lv_obj_set_style_radius(calendar_screen, 180, 0);
     lv_obj_set_style_pad_all(calendar_screen, 0, 0);
@@ -3220,23 +3323,11 @@ static void update_calendar_display(void) {
 }
 
 static void show_calendar_screen(void) {
-    // Hide all other screens
-    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
-    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
-    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
-    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
-    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-    if (wifi_screen) lv_obj_add_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
-
-    // Show calendar screen
-    if (calendar_screen) lv_obj_clear_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
+    hide_all_screens();
+    if (calendar_screen) {
+        lv_obj_clear_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(calendar_screen, 250);
+    }
     update_calendar_display();
     current_screen = SCREEN_CALENDAR;
 }
@@ -3503,8 +3594,9 @@ static void bts_quiz_answer_cb(lv_event_t *e) {
                 // Correct answer: green
                 lv_obj_set_style_bg_color(bts_q_btns[i], lv_color_hex(0x2ecc71), 0);
             } else if (i == answer_idx && !correct) {
-                // Wrong selection: red
+                // Wrong selection: red + shake
                 lv_obj_set_style_bg_color(bts_q_btns[i], lv_color_hex(0xe74c3c), 0);
+                obj_shake(bts_q_btns[i]);
             }
         }
     }
@@ -3536,24 +3628,11 @@ static void bts_quiz_back_cb(lv_event_t *e) {
 }
 
 static void show_bts_quiz_screen(void) {
-    // Hide all other screens
-    if (home_screen) lv_obj_add_flag(home_screen, LV_OBJ_FLAG_HIDDEN);
-    if (arc) lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
-    if (time_label) lv_obj_add_flag(time_label, LV_OBJ_FLAG_HIDDEN);
-    if (status_label) lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
-    if (hint_label) lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
-    if (btn_continue) lv_obj_add_flag(btn_continue, LV_OBJ_FLAG_HIDDEN);
-    if (btn_reset) lv_obj_add_flag(btn_reset, LV_OBJ_FLAG_HIDDEN);
-    if (timelog_screen) lv_obj_add_flag(timelog_screen, LV_OBJ_FLAG_HIDDEN);
-    if (wifi_screen) lv_obj_add_flag(wifi_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_screen) lv_obj_add_flag(jira_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_timer_screen) lv_obj_add_flag(jira_timer_screen, LV_OBJ_FLAG_HIDDEN);
-    if (jira_done_screen) lv_obj_add_flag(jira_done_screen, LV_OBJ_FLAG_HIDDEN);
-    if (weather_screen) lv_obj_add_flag(weather_screen, LV_OBJ_FLAG_HIDDEN);
-    if (calendar_screen) lv_obj_add_flag(calendar_screen, LV_OBJ_FLAG_HIDDEN);
-
-    // Show quiz screen
-    if (bts_quiz_screen) lv_obj_clear_flag(bts_quiz_screen, LV_OBJ_FLAG_HIDDEN);
+    hide_all_screens();
+    if (bts_quiz_screen) {
+        lv_obj_clear_flag(bts_quiz_screen, LV_OBJ_FLAG_HIDDEN);
+        screen_fade_in(bts_quiz_screen, 250);
+    }
     bts_quiz_show_start();
     current_screen = SCREEN_BTS_QUIZ;
 }
@@ -3573,8 +3652,10 @@ static void create_bts_quiz_ui(void) {
     bts_quiz_screen = lv_obj_create(scr);
     lv_obj_set_size(bts_quiz_screen, 360, 360);
     lv_obj_center(bts_quiz_screen);
-    lv_obj_set_style_bg_color(bts_quiz_screen, COLOR_BG, 0);
+    lv_obj_set_style_bg_color(bts_quiz_screen, lv_color_hex(0x1a0a2e), 0);
     lv_obj_set_style_bg_opa(bts_quiz_screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_grad_color(bts_quiz_screen, lv_color_hex(0x0a0a1a), 0);
+    lv_obj_set_style_bg_grad_dir(bts_quiz_screen, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_width(bts_quiz_screen, 0, 0);
     lv_obj_set_style_radius(bts_quiz_screen, 180, 0);
     lv_obj_set_style_pad_all(bts_quiz_screen, 0, 0);
@@ -3862,6 +3943,30 @@ void lcd_lvgl_Init(void)
     create_menu_ui();
     // Create settings overlay (on top of menu)
     create_settings_ui();
+
+    // ── Apply press feedback to all buttons ──
+    apply_btn_press_style(btn_continue);
+    apply_btn_press_style(btn_reset);
+    apply_btn_press_style(timelog_back_btn);
+    apply_btn_press_style(wifi_ap_btn);
+    apply_btn_press_style(wifi_back_btn);
+    apply_btn_press_style(jira_start_btn);
+    apply_btn_press_style(jira_log_btn);
+    apply_btn_press_style(jira_back_btn);
+    apply_btn_press_style(jira_detail_close_btn);
+    apply_btn_press_style(jira_detail_open_btn);
+    apply_btn_press_style(jira_timer_btn_continue);
+    apply_btn_press_style(jira_timer_btn_reset);
+    apply_btn_press_style(jira_done_back_btn);
+    apply_btn_press_style(weather_back_btn);
+    apply_btn_press_style(calendar_back_btn);
+    apply_btn_press_style(calendar_log_btn);
+    apply_btn_press_style(bts_start_btn);
+    apply_btn_press_style(bts_back_btn);
+    for (int i = 0; i < 4; i++) apply_btn_press_style(bts_q_btns[i]);
+    apply_btn_press_style(bts_r_retry_btn);
+    apply_btn_press_style(bts_r_back_btn);
+
     // Create splash screen on top of everything (shown first)
     create_splash_ui();
     current_screen = SCREEN_HOME;
